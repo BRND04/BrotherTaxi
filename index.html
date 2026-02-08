@@ -61,8 +61,11 @@
 <body class="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden">
 
     <!-- Loading Overlay -->
-    <div id="loading" class="fixed inset-0 bg-gray-900 z-50 flex items-center justify-center">
-        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+    <div id="loading" class="fixed inset-0 bg-gray-900 z-50 flex flex-col items-center justify-center p-6 text-center">
+        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+        <p class="text-gray-400 text-sm animate-pulse">Connecting to Dispatch...</p>
+        <div id="error-debug" class="hidden mt-6 p-4 bg-red-900/50 border border-red-700 rounded text-red-200 text-xs max-w-sm overflow-auto"></div>
+        <button id="retry-btn" onclick="window.location.reload()" class="hidden mt-4 px-4 py-2 bg-gray-700 rounded hover:bg-gray-600">Retry</button>
     </div>
 
     <!-- Main App Container -->
@@ -169,18 +172,29 @@
         let db, auth, user;
         let unsubscribeDoc;
         const COLLECTION_NAME = 'taxi_status';
+        // NEW: Added a specific Document ID to ensure even segments in Firestore path
+        const DOCUMENT_ID = 'status'; 
         const ADMIN_PIN = "1234"; 
 
-        // Environment + User Config Setup
-        // We use a hybrid approach so the Preview works for you now, 
-        // but the downloaded file uses YOUR keys.
+        // Safety Valve: If app takes too long, force error display
+        setTimeout(() => {
+            const loader = document.getElementById('loading');
+            if (!loader.classList.contains('hidden')) {
+                const debugBox = document.getElementById('error-debug');
+                if (debugBox.classList.contains('hidden')) {
+                    debugBox.innerHTML = `<strong>Timeout Error:</strong><br>App took too long to connect.<br>1. Check internet.<br>2. Check Firebase Console > Authentication > Enable Anonymous.<br>3. Check Firestore Rules (Test Mode).`;
+                    debugBox.classList.remove('hidden');
+                    document.getElementById('retry-btn').classList.remove('hidden');
+                }
+            }
+        }, 5000);
+
         let firebaseConfig;
         
         if (typeof __firebase_config !== 'undefined') {
-            // Internal Preview Environment (uses temporary keys)
             firebaseConfig = JSON.parse(__firebase_config);
         } else {
-            // YOUR Production Environment (uses your keys)
+            // YOUR Production Config
             firebaseConfig = {
                 apiKey: "AIzaSyBQNrMiIGMpaf8D5-iALSxkJhtVtzQsNvo",
                 authDomain: "brothertaxi-9e53e.firebaseapp.com",
@@ -200,28 +214,29 @@
             db = getFirestore(app);
             initAuth();
         } catch (e) {
-            console.error("Firebase Initialization Error:", e);
-            document.getElementById('status-message').innerText = "Config Error. Check Console.";
-            document.getElementById('loading').classList.add('hidden');
+            reportError("Firebase Init Failed: " + e.message);
         }
 
         async function initAuth() {
-            // Handle Authentication based on Environment
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                // Internal Preview Auth
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                // Your Production Auth (Anonymous)
-                await signInAnonymously(auth);
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                // Common Error: Anonymous Auth not enabled in console
+                if(error.code === 'auth/admin-restricted-operation' || error.code === 'auth/operation-not-allowed') {
+                    reportError("Authentication is disabled. Go to Firebase Console > Authentication > Sign-in method > Enable Anonymous.");
+                } else {
+                    reportError("Auth Error: " + error.message);
+                }
             }
 
             onAuthStateChanged(auth, (currentUser) => {
                 user = currentUser;
                 if (user) {
                     initDataListener();
-                } else {
-                    // Fallback retry if anonymous sign-in is slow or fails initially
-                    signInAnonymously(auth);
                 }
             });
         }
@@ -229,7 +244,8 @@
         function initDataListener() {
             if (!user) return;
 
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            // FIX: Added DOCUMENT_ID to the path to make it 6 segments (Artifacts/ID/Public/Data/Collection/Doc)
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
 
             unsubscribeDoc = onSnapshot(docRef, (docSnap) => {
                 document.getElementById('loading').classList.add('hidden');
@@ -237,24 +253,36 @@
                 if (docSnap.exists()) {
                     updateUI(docSnap.data());
                 } else {
-                    // Initialize default data if it doesn't exist
                     const defaultData = {
                         ridesRemaining: 3,
                         maxRides: 3,
                         lastUpdated: new Date().toISOString()
                     };
-                    setDoc(docRef, defaultData);
+                    setDoc(docRef, defaultData).catch(e => reportError("Failed to create init data: " + e.message));
                     updateUI(defaultData);
                 }
             }, (error) => {
+                // Ensure loading screen is gone so user sees the toast
+                document.getElementById('loading').classList.add('hidden');
+                
                 console.error("Error listening to document:", error);
-                // In production, this often means Firestore rules are too strict or quota exceeded
                 if(error.code === 'permission-denied') {
-                    showToast("Database Permission Error");
+                    reportError("Database Permission Denied. Go to Firebase Console > Firestore > Rules > Set to Test Mode (allow read, write: if true;)");
                 } else {
-                    showToast("Connection lost. Retrying...");
+                    showToast("Connection issue. Retrying...");
                 }
             });
+        }
+
+        function reportError(msg) {
+            const loader = document.getElementById('loading');
+            const debugBox = document.getElementById('error-debug');
+            
+            // Ensure loader is visible to show error
+            loader.classList.remove('hidden');
+            debugBox.innerHTML = `<strong>Error:</strong><br>${msg}`;
+            debugBox.classList.remove('hidden');
+            document.getElementById('retry-btn').classList.remove('hidden');
         }
 
         // --- UI Logic ---
@@ -294,7 +322,6 @@
                     "Premium service enabled.",
                     "Driver is currently caffeinated."
                 ];
-                // Only pick a random message on load to avoid jitter, or just static for now
                 if(message.innerText.includes("Loading") || message.innerText.includes("Walk") || message.innerText.includes("Connecting")) {
                     message.innerText = happyMessages[Math.floor(Math.random() * happyMessages.length)];
                 }
@@ -342,7 +369,7 @@
 
         window.updateRides = async (amount) => {
             if (!user) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
             
             try {
                 const docSnap = await getDoc(docRef);
@@ -364,7 +391,7 @@
 
         window.resetWeek = async () => {
             if (!user) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
             const limitInput = document.getElementById('new-limit');
             const max = parseInt(limitInput.value) || 3;
 
@@ -382,7 +409,7 @@
 
         window.setLimit = async () => {
             if (!user) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
             const limitInput = document.getElementById('new-limit');
             const newMax = parseInt(limitInput.value);
 
@@ -404,8 +431,6 @@
         window.requestRideAction = () => {
             const count = document.getElementById('rides-count').innerText;
             if (parseInt(count) > 0) {
-                // In a real app, this could trigger an SMS API
-                // For now, it opens the default SMS app
                 window.location.href = "sms:?body=Hey, I am using one of my taxi credits. ETA?";
             } else {
                 showToast("You have 0 credits. Walk.");
