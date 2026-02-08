@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brother Taxi Service</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* Dark gray */
+            color: white;
+            touch-action: manipulation; /* Improves touch response */
+        }
+        
+        .status-card {
+            transition: all 0.5s ease-in-out;
+        }
+
+        .pulse-animation {
+            animation: pulse-glow 2s infinite;
+        }
+
+        @keyframes pulse-glow {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { box-shadow: 0 0 0 20px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        /* Danger Pulse */
+        .danger-pulse {
+            animation: danger-glow 2s infinite;
+        }
+
+        @keyframes danger-glow {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        .hidden-panel {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease-out;
+        }
+
+        .hidden-panel.open {
+            max-height: 500px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden">
+
+    <!-- Loading Overlay -->
+    <div id="loading" class="fixed inset-0 bg-gray-900 z-50 flex items-center justify-center">
+        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+    </div>
+
+    <!-- Main App Container -->
+    <div class="w-full max-w-md w-full space-y-6 relative z-10">
+        
+        <!-- Header -->
+        <header class="text-center space-y-2">
+            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800 mb-2 border border-gray-700">
+                <i class="fas fa-taxi text-yellow-400 text-2xl"></i>
+            </div>
+            <h1 class="text-2xl font-extrabold tracking-tight text-gray-100 uppercase">The Brother<br><span class="text-yellow-400">Taxi Service</span></h1>
+            <p class="text-xs text-gray-500 uppercase tracking-widest">Premium Family Logistics</p>
+        </header>
+
+        <!-- Dynamic Status Card -->
+        <div id="status-card" class="bg-gray-800 rounded-3xl p-8 text-center shadow-2xl border border-gray-700 status-card relative overflow-hidden">
+            <!-- Background glow effect -->
+            <div id="status-glow" class="absolute top-0 left-0 w-full h-2 bg-gray-600"></div>
+            
+            <div class="space-y-6 relative z-10">
+                <div>
+                    <p class="text-gray-400 text-sm font-semibold uppercase mb-1">Rides Remaining</p>
+                    <div class="flex items-baseline justify-center">
+                        <span id="rides-count" class="text-7xl font-extrabold text-white">?</span>
+                        <span class="text-3xl text-gray-500 font-bold">/</span>
+                        <span id="max-count" class="text-3xl text-gray-500 font-bold">?</span>
+                    </div>
+                </div>
+
+                <div id="status-badge" class="inline-block px-4 py-2 rounded-full bg-gray-700 text-gray-300 font-bold text-sm tracking-wide">
+                    Loading Status...
+                </div>
+
+                <p id="status-message" class="text-lg text-gray-300 font-medium italic">
+                    "Connecting to satellite..."
+                </p>
+            </div>
+        </div>
+
+        <!-- Request Button (Visual Only for Brother) -->
+        <button onclick="requestRideAction()" class="w-full bg-gray-800 hover:bg-gray-700 text-white font-bold py-4 rounded-xl border border-gray-700 shadow-lg transition transform active:scale-95 flex items-center justify-center gap-2 group">
+            <i class="fas fa-paper-plane text-blue-400 group-hover:text-blue-300"></i>
+            Request Pickup via SMS
+        </button>
+
+        <!-- Admin Login Trigger -->
+        <div class="pt-8 flex justify-center">
+            <button onclick="toggleAdminPanel()" class="text-gray-700 hover:text-gray-500 transition p-2">
+                <i class="fas fa-lock text-sm"></i>
+            </button>
+        </div>
+
+        <!-- Admin Panel (Hidden) -->
+        <div id="admin-panel" class="hidden-panel bg-gray-800 rounded-xl border border-gray-700 w-full overflow-hidden">
+            <div class="p-6 space-y-4">
+                <h3 class="text-yellow-400 font-bold uppercase text-xs tracking-widest border-b border-gray-700 pb-2 mb-4">
+                    Dispatcher Control
+                </h3>
+                
+                <!-- Pin Input (Only shown if not authenticated locally) -->
+                <div id="pin-entry" class="space-y-2">
+                    <p class="text-sm text-gray-400">Enter Admin PIN:</p>
+                    <div class="flex gap-2">
+                        <input type="password" id="admin-pin" class="bg-gray-900 border border-gray-700 rounded p-2 text-white w-full text-center tracking-widest" maxlength="4" placeholder="••••">
+                        <button onclick="verifyPin()" class="bg-blue-600 text-white px-4 rounded font-bold">GO</button>
+                    </div>
+                    <p id="pin-error" class="text-red-500 text-xs hidden">Invalid PIN</p>
+                </div>
+
+                <!-- Controls (Hidden until PIN verified) -->
+                <div id="admin-controls" class="space-y-3 hidden">
+                    <button onclick="updateRides(-1)" class="w-full bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800 font-bold py-3 rounded-lg flex items-center justify-center gap-2">
+                        <i class="fas fa-minus-circle"></i> Deduct Ride
+                    </button>
+                    
+                    <button onclick="resetWeek()" class="w-full bg-green-900/50 hover:bg-green-900 text-green-200 border border-green-800 font-bold py-3 rounded-lg flex items-center justify-center gap-2">
+                        <i class="fas fa-sync-alt"></i> Reset Week
+                    </button>
+
+                    <div class="pt-4 border-t border-gray-700">
+                        <p class="text-xs text-gray-500 mb-2">Adjust Limit:</p>
+                        <div class="flex gap-2">
+                            <input type="number" id="new-limit" class="bg-gray-900 border border-gray-700 text-white p-2 rounded w-16 text-center" value="3">
+                            <button onclick="setLimit()" class="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 rounded">Set Max</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed top-5 bg-blue-600 text-white px-6 py-3 rounded-full shadow-2xl transform -translate-y-20 transition-transform duration-300 z-50 flex items-center gap-2 font-semibold">
+        <i class="fas fa-info-circle"></i> <span id="toast-msg">Notification</span>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, getDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        let db, auth, user;
+        let unsubscribeDoc;
+        const COLLECTION_NAME = 'taxi_status';
+        const ADMIN_PIN = "1234"; 
+
+        // Environment + User Config Setup
+        // We use a hybrid approach so the Preview works for you now, 
+        // but the downloaded file uses YOUR keys.
+        let firebaseConfig;
+        
+        if (typeof __firebase_config !== 'undefined') {
+            // Internal Preview Environment (uses temporary keys)
+            firebaseConfig = JSON.parse(__firebase_config);
+        } else {
+            // YOUR Production Environment (uses your keys)
+            firebaseConfig = {
+                apiKey: "AIzaSyBQNrMiIGMpaf8D5-iALSxkJhtVtzQsNvo",
+                authDomain: "brothertaxi-9e53e.firebaseapp.com",
+                projectId: "brothertaxi-9e53e",
+                storageBucket: "brothertaxi-9e53e.firebasestorage.app",
+                messagingSenderId: "213463597341",
+                appId: "1:213463597341:web:c35c73def92236752d61f4",
+                measurementId: "G-5F08T8G2T1"
+            };
+        }
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'brother-taxi-app';
+        
+        try {
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            initAuth();
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+            document.getElementById('status-message').innerText = "Config Error. Check Console.";
+            document.getElementById('loading').classList.add('hidden');
+        }
+
+        async function initAuth() {
+            // Handle Authentication based on Environment
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                // Internal Preview Auth
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                // Your Production Auth (Anonymous)
+                await signInAnonymously(auth);
+            }
+
+            onAuthStateChanged(auth, (currentUser) => {
+                user = currentUser;
+                if (user) {
+                    initDataListener();
+                } else {
+                    // Fallback retry if anonymous sign-in is slow or fails initially
+                    signInAnonymously(auth);
+                }
+            });
+        }
+
+        function initDataListener() {
+            if (!user) return;
+
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+
+            unsubscribeDoc = onSnapshot(docRef, (docSnap) => {
+                document.getElementById('loading').classList.add('hidden');
+                
+                if (docSnap.exists()) {
+                    updateUI(docSnap.data());
+                } else {
+                    // Initialize default data if it doesn't exist
+                    const defaultData = {
+                        ridesRemaining: 3,
+                        maxRides: 3,
+                        lastUpdated: new Date().toISOString()
+                    };
+                    setDoc(docRef, defaultData);
+                    updateUI(defaultData);
+                }
+            }, (error) => {
+                console.error("Error listening to document:", error);
+                // In production, this often means Firestore rules are too strict or quota exceeded
+                if(error.code === 'permission-denied') {
+                    showToast("Database Permission Error");
+                } else {
+                    showToast("Connection lost. Retrying...");
+                }
+            });
+        }
+
+        // --- UI Logic ---
+
+        function updateUI(data) {
+            const current = data.ridesRemaining;
+            const max = data.maxRides;
+            
+            // Update Numbers
+            document.getElementById('rides-count').innerText = current;
+            document.getElementById('max-count').innerText = max;
+            document.getElementById('new-limit').value = max;
+
+            // Visual State Logic
+            const card = document.getElementById('status-card');
+            const badge = document.getElementById('status-badge');
+            const message = document.getElementById('status-message');
+            const glow = document.getElementById('status-glow');
+
+            // Reset classes
+            card.classList.remove('pulse-animation', 'danger-pulse');
+            
+            if (current > 0) {
+                // HAPPY STATE
+                card.classList.add('pulse-animation');
+                card.classList.remove('border-red-500');
+                card.classList.add('border-green-500');
+                
+                glow.className = "absolute top-0 left-0 w-full h-2 bg-green-500 shadow-[0_0_20px_rgba(16,185,129,0.5)]";
+                
+                badge.className = "inline-block px-4 py-2 rounded-full bg-green-900/50 text-green-300 border border-green-700 font-bold text-sm tracking-wide";
+                badge.innerHTML = '<i class="fas fa-check-circle mr-1"></i> TAXI AVAILABLE';
+                
+                const happyMessages = [
+                    "Your carriage awaits, sir.",
+                    "Gas tank is full. Dignity is intact.",
+                    "Premium service enabled.",
+                    "Driver is currently caffeinated."
+                ];
+                // Only pick a random message on load to avoid jitter, or just static for now
+                if(message.innerText.includes("Loading") || message.innerText.includes("Walk") || message.innerText.includes("Connecting")) {
+                    message.innerText = happyMessages[Math.floor(Math.random() * happyMessages.length)];
+                }
+            } else {
+                // SAD/LOCKED STATE
+                card.classList.add('danger-pulse');
+                card.classList.remove('border-green-500');
+                card.classList.add('border-red-500');
+
+                glow.className = "absolute top-0 left-0 w-full h-2 bg-red-600 shadow-[0_0_20px_rgba(239,68,68,0.5)]";
+                
+                badge.className = "inline-block px-4 py-2 rounded-full bg-red-900/50 text-red-300 border border-red-700 font-bold text-sm tracking-wide";
+                badge.innerHTML = '<i class="fas fa-ban mr-1"></i> SERVICE SUSPENDED';
+                
+                message.innerText = "Start walking. Character building exercise initiated.";
+            }
+        }
+
+        // --- Admin Logic ---
+
+        window.toggleAdminPanel = () => {
+            const panel = document.getElementById('admin-panel');
+            panel.classList.toggle('open');
+        };
+
+        window.verifyPin = () => {
+            const input = document.getElementById('admin-pin');
+            const error = document.getElementById('pin-error');
+            const controls = document.getElementById('admin-controls');
+            const pinEntry = document.getElementById('pin-entry');
+
+            if (input.value === ADMIN_PIN) {
+                pinEntry.classList.add('hidden');
+                controls.classList.remove('hidden');
+                error.classList.add('hidden');
+                showToast("Welcome back, Boss.");
+            } else {
+                error.classList.remove('hidden');
+                input.value = '';
+                input.focus();
+            }
+        };
+
+        // --- Data Operations ---
+
+        window.updateRides = async (amount) => {
+            if (!user) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            
+            try {
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const current = docSnap.data().ridesRemaining;
+                    const newAmount = Math.max(0, current + amount); // Prevent negative
+                    
+                    await updateDoc(docRef, {
+                        ridesRemaining: newAmount,
+                        lastUpdated: new Date().toISOString()
+                    });
+                    showToast(amount < 0 ? "Ride Deducted" : "Ride Added");
+                }
+            } catch (e) {
+                console.error(e);
+                showToast("Error updating database");
+            }
+        };
+
+        window.resetWeek = async () => {
+            if (!user) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            const limitInput = document.getElementById('new-limit');
+            const max = parseInt(limitInput.value) || 3;
+
+            try {
+                await updateDoc(docRef, {
+                    ridesRemaining: max,
+                    maxRides: max,
+                    lastUpdated: new Date().toISOString()
+                });
+                showToast("Counter Reset Successful");
+            } catch (e) {
+                console.error(e);
+            }
+        };
+
+        window.setLimit = async () => {
+            if (!user) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME);
+            const limitInput = document.getElementById('new-limit');
+            const newMax = parseInt(limitInput.value);
+
+            if (newMax > 0) {
+                try {
+                    await updateDoc(docRef, {
+                        maxRides: newMax,
+                        lastUpdated: new Date().toISOString()
+                    });
+                    showToast(`Max limit set to ${newMax}`);
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+        };
+
+        // --- Utilities ---
+
+        window.requestRideAction = () => {
+            const count = document.getElementById('rides-count').innerText;
+            if (parseInt(count) > 0) {
+                // In a real app, this could trigger an SMS API
+                // For now, it opens the default SMS app
+                window.location.href = "sms:?body=Hey, I am using one of my taxi credits. ETA?";
+            } else {
+                showToast("You have 0 credits. Walk.");
+            }
+        };
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toast-msg');
+            toastMsg.innerText = msg;
+            toast.classList.remove('-translate-y-20');
+            setTimeout(() => {
+                toast.classList.add('-translate-y-20');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
