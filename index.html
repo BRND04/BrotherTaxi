@@ -113,7 +113,7 @@
 
         <!-- Admin Login Trigger -->
         <div class="pt-8 flex justify-center">
-            <button onclick="toggleAdminPanel()" class="text-gray-700 hover:text-gray-500 transition p-2">
+            <button onclick="toggleAdminPanel()" id="lock-icon" class="text-gray-700 hover:text-gray-500 transition p-2">
                 <i class="fas fa-lock text-sm"></i>
             </button>
         </div>
@@ -121,21 +121,25 @@
         <!-- Admin Panel (Hidden) -->
         <div id="admin-panel" class="hidden-panel bg-gray-800 rounded-xl border border-gray-700 w-full overflow-hidden">
             <div class="p-6 space-y-4">
-                <h3 class="text-yellow-400 font-bold uppercase text-xs tracking-widest border-b border-gray-700 pb-2 mb-4">
-                    Dispatcher Control
+                <h3 class="flex justify-between items-center text-yellow-400 font-bold uppercase text-xs tracking-widest border-b border-gray-700 pb-2 mb-4">
+                    <span>Dispatcher Control</span>
+                    <!-- Sign Out Button -->
+                    <button id="sign-out-btn" onclick="logoutAdmin()" class="hidden text-gray-500 hover:text-white">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
                 </h3>
                 
-                <!-- Pin Input (Only shown if not authenticated locally) -->
+                <!-- Pin Input (Only shown if not authenticated as Admin) -->
                 <div id="pin-entry" class="space-y-2">
-                    <p class="text-sm text-gray-400">Enter Admin PIN:</p>
+                    <p class="text-sm text-gray-400">Enter Admin Password:</p>
                     <div class="flex gap-2">
-                        <input type="password" id="admin-pin" class="bg-gray-900 border border-gray-700 rounded p-2 text-white w-full text-center tracking-widest" maxlength="4" placeholder="••••">
-                        <button onclick="verifyPin()" class="bg-blue-600 text-white px-4 rounded font-bold">GO</button>
+                        <input type="password" id="admin-pin" class="bg-gray-900 border border-gray-700 rounded p-2 text-white w-full text-center tracking-widest" placeholder="Password">
+                        <button onclick="verifyPin()" id="go-btn" class="bg-blue-600 text-white px-4 rounded font-bold">GO</button>
                     </div>
-                    <p id="pin-error" class="text-red-500 text-xs hidden">Invalid PIN</p>
+                    <p id="pin-error" class="text-red-500 text-xs hidden">Invalid Credentials</p>
                 </div>
 
-                <!-- Controls (Hidden until PIN verified) -->
+                <!-- Controls (Hidden until Admin Verified) -->
                 <div id="admin-controls" class="space-y-3 hidden">
                     <button onclick="updateRides(-1)" class="w-full bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800 font-bold py-3 rounded-lg flex items-center justify-center gap-2">
                         <i class="fas fa-minus-circle"></i> Deduct Ride
@@ -167,22 +171,23 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getFirestore, doc, onSnapshot, setDoc, updateDoc, getDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
         let db, auth, user;
         let unsubscribeDoc;
         const COLLECTION_NAME = 'taxi_status';
-        // NEW: Added a specific Document ID to ensure even segments in Firestore path
         const DOCUMENT_ID = 'status'; 
-        const ADMIN_PIN = "1234"; 
+        
+        // This is the "Keyhole". The password is on the Server.
+        const ADMIN_EMAIL = "admin@brothertaxi.com"; 
 
-        // Safety Valve: If app takes too long, force error display
+        // Safety Valve
         setTimeout(() => {
             const loader = document.getElementById('loading');
             if (!loader.classList.contains('hidden')) {
                 const debugBox = document.getElementById('error-debug');
                 if (debugBox.classList.contains('hidden')) {
-                    debugBox.innerHTML = `<strong>Timeout Error:</strong><br>App took too long to connect.<br>1. Check internet.<br>2. Check Firebase Console > Authentication > Enable Anonymous.<br>3. Check Firestore Rules (Test Mode).`;
+                    debugBox.innerHTML = `<strong>Timeout Error:</strong><br>App took too long to connect.<br>1. Check internet.<br>2. Check Firebase Console > Authentication > Enable Anonymous AND Email/Password.`;
                     debugBox.classList.remove('hidden');
                     document.getElementById('retry-btn').classList.remove('hidden');
                 }
@@ -218,33 +223,52 @@
         }
 
         async function initAuth() {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                // Common Error: Anonymous Auth not enabled in console
-                if(error.code === 'auth/admin-restricted-operation' || error.code === 'auth/operation-not-allowed') {
-                    reportError("Authentication is disabled. Go to Firebase Console > Authentication > Sign-in method > Enable Anonymous.");
-                } else {
-                    reportError("Auth Error: " + error.message);
-                }
-            }
-
+            // Initially, we check if they are ALREADY logged in (persists across refreshes)
+            // If not, we sign them in Anonymously so they can READ the status
             onAuthStateChanged(auth, (currentUser) => {
                 user = currentUser;
+                
                 if (user) {
                     initDataListener();
+                    updateAdminUI(user);
+                } else {
+                    // Not logged in? Be a ghost.
+                    signInAnonymously(auth).catch((error) => {
+                        reportError("Auth Error: " + error.message);
+                    });
                 }
             });
         }
 
-        function initDataListener() {
-            if (!user) return;
+        function updateAdminUI(currentUser) {
+            const controls = document.getElementById('admin-controls');
+            const pinEntry = document.getElementById('pin-entry');
+            const lockIcon = document.getElementById('lock-icon');
+            const signOutBtn = document.getElementById('sign-out-btn');
+            const adminPanel = document.getElementById('admin-panel');
 
-            // FIX: Added DOCUMENT_ID to the path to make it 6 segments (Artifacts/ID/Public/Data/Collection/Doc)
+            if (currentUser.email === ADMIN_EMAIL) {
+                // User is ADMIN
+                pinEntry.classList.add('hidden');
+                controls.classList.remove('hidden');
+                signOutBtn.classList.remove('hidden');
+                
+                // Show unlocked icon
+                lockIcon.innerHTML = '<i class="fas fa-lock-open text-green-500"></i>';
+                
+                // Optional: Auto open panel if admin
+                if (!adminPanel.classList.contains('open')) adminPanel.classList.add('open');
+            } else {
+                // User is BROTHER (Anonymous)
+                pinEntry.classList.remove('hidden');
+                controls.classList.add('hidden');
+                signOutBtn.classList.add('hidden');
+                lockIcon.innerHTML = '<i class="fas fa-lock text-sm"></i>';
+            }
+        }
+
+        function initDataListener() {
+            // Using same ref for everyone
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
 
             unsubscribeDoc = onSnapshot(docRef, (docSnap) => {
@@ -253,23 +277,25 @@
                 if (docSnap.exists()) {
                     updateUI(docSnap.data());
                 } else {
-                    const defaultData = {
-                        ridesRemaining: 3,
-                        maxRides: 3,
-                        lastUpdated: new Date().toISOString()
-                    };
-                    setDoc(docRef, defaultData).catch(e => reportError("Failed to create init data: " + e.message));
-                    updateUI(defaultData);
+                    // If doc doesn't exist, we try to create it. 
+                    // This might fail if rules only allow Admin to write, which is good security.
+                    // But for first run, we might need to manually create it or allow anon write once.
+                    if(user && user.email === ADMIN_EMAIL) {
+                        const defaultData = {
+                            ridesRemaining: 3,
+                            maxRides: 3,
+                            lastUpdated: new Date().toISOString()
+                        };
+                        setDoc(docRef, defaultData);
+                        updateUI(defaultData);
+                    }
                 }
             }, (error) => {
-                // Ensure loading screen is gone so user sees the toast
                 document.getElementById('loading').classList.add('hidden');
-                
-                console.error("Error listening to document:", error);
+                console.error("Error:", error);
                 if(error.code === 'permission-denied') {
-                    reportError("Database Permission Denied. Go to Firebase Console > Firestore > Rules > Set to Test Mode (allow read, write: if true;)");
-                } else {
-                    showToast("Connection issue. Retrying...");
+                    // It's fine if Brother can't write, but he should be able to read.
+                    // If read fails, rules are too strict.
                 }
             });
         }
@@ -277,8 +303,6 @@
         function reportError(msg) {
             const loader = document.getElementById('loading');
             const debugBox = document.getElementById('error-debug');
-            
-            // Ensure loader is visible to show error
             loader.classList.remove('hidden');
             debugBox.innerHTML = `<strong>Error:</strong><br>${msg}`;
             debugBox.classList.remove('hidden');
@@ -288,31 +312,27 @@
         // --- UI Logic ---
 
         function updateUI(data) {
+            if (!data) return;
             const current = data.ridesRemaining;
             const max = data.maxRides;
             
-            // Update Numbers
             document.getElementById('rides-count').innerText = current;
             document.getElementById('max-count').innerText = max;
             document.getElementById('new-limit').value = max;
 
-            // Visual State Logic
             const card = document.getElementById('status-card');
             const badge = document.getElementById('status-badge');
             const message = document.getElementById('status-message');
             const glow = document.getElementById('status-glow');
 
-            // Reset classes
             card.classList.remove('pulse-animation', 'danger-pulse');
             
             if (current > 0) {
-                // HAPPY STATE
+                // HAPPY
                 card.classList.add('pulse-animation');
                 card.classList.remove('border-red-500');
                 card.classList.add('border-green-500');
-                
                 glow.className = "absolute top-0 left-0 w-full h-2 bg-green-500 shadow-[0_0_20px_rgba(16,185,129,0.5)]";
-                
                 badge.className = "inline-block px-4 py-2 rounded-full bg-green-900/50 text-green-300 border border-green-700 font-bold text-sm tracking-wide";
                 badge.innerHTML = '<i class="fas fa-check-circle mr-1"></i> TAXI AVAILABLE';
                 
@@ -326,56 +346,66 @@
                     message.innerText = happyMessages[Math.floor(Math.random() * happyMessages.length)];
                 }
             } else {
-                // SAD/LOCKED STATE
+                // SAD
                 card.classList.add('danger-pulse');
                 card.classList.remove('border-green-500');
                 card.classList.add('border-red-500');
-
                 glow.className = "absolute top-0 left-0 w-full h-2 bg-red-600 shadow-[0_0_20px_rgba(239,68,68,0.5)]";
-                
                 badge.className = "inline-block px-4 py-2 rounded-full bg-red-900/50 text-red-300 border border-red-700 font-bold text-sm tracking-wide";
                 badge.innerHTML = '<i class="fas fa-ban mr-1"></i> SERVICE SUSPENDED';
-                
                 message.innerText = "Start walking. Character building exercise initiated.";
             }
         }
 
-        // --- Admin Logic ---
+        // --- Admin Logic (Server Side Auth) ---
 
         window.toggleAdminPanel = () => {
-            const panel = document.getElementById('admin-panel');
-            panel.classList.toggle('open');
+            document.getElementById('admin-panel').classList.toggle('open');
         };
 
-        window.verifyPin = () => {
+        window.verifyPin = async () => {
             const input = document.getElementById('admin-pin');
+            const btn = document.getElementById('go-btn');
             const error = document.getElementById('pin-error');
-            const controls = document.getElementById('admin-controls');
-            const pinEntry = document.getElementById('pin-entry');
+            
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            error.classList.add('hidden');
 
-            if (input.value === ADMIN_PIN) {
-                pinEntry.classList.add('hidden');
-                controls.classList.remove('hidden');
-                error.classList.add('hidden');
+            try {
+                // SERVER SIDE CHECK: We try to log in. 
+                // If the password (PIN) is wrong, Firebase throws an error.
+                await signInWithEmailAndPassword(auth, ADMIN_EMAIL, input.value);
+                
+                // Logic continues in onAuthStateChanged
                 showToast("Welcome back, Boss.");
-            } else {
+                input.value = "";
+            } catch (e) {
+                console.error(e);
                 error.classList.remove('hidden');
-                input.value = '';
-                input.focus();
+                error.innerText = "Access Denied";
+            } finally {
+                btn.innerHTML = 'GO';
             }
         };
 
-        // --- Data Operations ---
+        window.logoutAdmin = async () => {
+            await signOut(auth);
+            // This triggers onAuthStateChanged -> user becomes null -> calls signInAnonymously automatically
+            showToast("Admin Logged Out");
+            document.getElementById('admin-panel').classList.remove('open');
+        };
+
+        // --- Data Operations (Only work if Admin) ---
 
         window.updateRides = async (amount) => {
-            if (!user) return;
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
+            if (!user || user.email !== ADMIN_EMAIL) return showToast("Admin Access Required");
             
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
             try {
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     const current = docSnap.data().ridesRemaining;
-                    const newAmount = Math.max(0, current + amount); // Prevent negative
+                    const newAmount = Math.max(0, current + amount);
                     
                     await updateDoc(docRef, {
                         ridesRemaining: newAmount,
@@ -385,12 +415,12 @@
                 }
             } catch (e) {
                 console.error(e);
-                showToast("Error updating database");
+                showToast("Update Failed: " + e.message);
             }
         };
 
         window.resetWeek = async () => {
-            if (!user) return;
+            if (!user || user.email !== ADMIN_EMAIL) return showToast("Admin Access Required");
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
             const limitInput = document.getElementById('new-limit');
             const max = parseInt(limitInput.value) || 3;
@@ -408,7 +438,7 @@
         };
 
         window.setLimit = async () => {
-            if (!user) return;
+            if (!user || user.email !== ADMIN_EMAIL) return showToast("Admin Access Required");
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', COLLECTION_NAME, DOCUMENT_ID);
             const limitInput = document.getElementById('new-limit');
             const newMax = parseInt(limitInput.value);
